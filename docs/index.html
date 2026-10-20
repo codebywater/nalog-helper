@@ -6,100 +6,218 @@
 <!-- Страница не может ничего отправить в сеть: запросы запрещены политикой безопасности. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
 <title>Налоговый помощник</title>
 <meta name="description" content="Сколько налогов и взносов платить ИП на УСН 6% и самозанятому — по выписке из банка. Работает в браузере, выписка никуда не отправляется.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BE%3C/text%3E%3C/svg%3E">
 <style>
+/* ---------- токены ---------- */
 :root {
-  --bg: #f6f7f4; --surface: #fff; --text: #1b1d1a; --muted: #686b64; --line: #e2e4dd;
-  --accent: #1f5fa8; --accent-soft: #e5eef9; --ok: #17694b; --ok-soft: #e2f2ea;
-  --warn: #8f5800; --warn-soft: #fcf1dc; --danger: #a12f29; --danger-soft: #fbe5e3;
+  /* нейтральная шкала, тёплый серый */
+  --n-0: #ffffff; --n-50: #f7f7f4; --n-100: #efefeb; --n-200: #e3e3de; --n-300: #cbcbc4;
+  --n-500: #76766f; --n-600: #5c5c55; --n-800: #26261f; --n-900: #161614;
+  --accent: #2f45c8; --accent-hover: #2537a6; --accent-soft: #eceffd; --on-accent: #ffffff;
+  --success: #146c43; --success-soft: #e6f4ec;
+  --warning: #8a5300; --warning-soft: #fdf3e1;
+  --error: #b42318; --error-soft: #fdecea;
+
+  --bg: var(--n-50); --surface: var(--n-0); --surface-2: var(--n-100);
+  --line: var(--n-200); --line-strong: var(--n-300);
+  --text: var(--n-900); --muted: var(--n-600);
+  --glow: radial-gradient(60% 60% at 50% 0%, rgba(47, 69, 200, .14), transparent 70%);
+
+  /* шкала 1.25 от 16px */
+  --fs-sm: 13px; --fs-base: 16px; --fs-md: 20px; --fs-lg: 25px; --fs-xl: 31px; --fs-hero: clamp(34px, 6vw, 52px);
+  /* сетка 4px */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-6: 24px; --s-8: 32px; --s-12: 48px; --s-16: 64px; --s-24: 96px;
+  --r-sm: 8px; --r-md: 14px; --r-lg: 22px;
+  --shadow-1: 0 1px 2px rgba(22, 22, 20, .05);
+  --shadow-2: 0 1px 2px rgba(22, 22, 20, .04), 0 12px 32px -8px rgba(22, 22, 20, .12);
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131512; --surface: #1c1e1b; --text: #eceee8; --muted: #a0a39b; --line: #30332e;
-    --accent: #7fb2ef; --accent-soft: #1b2a3c; --ok: #6fcf9f; --ok-soft: #1a3027;
-    --warn: #e8b660; --warn-soft: #35291a; --danger: #ef8b84; --danger-soft: #3a2220;
+    --accent: #9aa8ff; --accent-hover: #b6c0ff; --accent-soft: #1f2440; --on-accent: #121311;
+    --success: #6fd3a0; --success-soft: #16271e;
+    --warning: #f0b75b; --warning-soft: #2e2415;
+    --error: #ff9b91; --error-soft: #341c1a;
+    --bg: #121311; --surface: #1b1c1a; --surface-2: #242522;
+    --line: #2d2e2b; --line-strong: #3d3e3a;
+    --text: #ecece8; --muted: #a3a39c;
+    --glow: radial-gradient(60% 60% at 50% 0%, rgba(154, 168, 255, .16), transparent 70%);
+    /* тени в тёмной теме не видны: глубину даёт светлее фон поверхности */
+    --shadow-1: none; --shadow-2: none;
   }
 }
+
+/* ---------- база ---------- */
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-.wrap { max-width: 960px; margin: 0 auto; padding: 0 16px 48px; }
-header.top { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; }
-.brand { font-weight: 700; }
-.top a, footer a { color: var(--muted); }
-h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.15; letter-spacing: -.02em; margin: 32px 0 12px; }
-.lead { color: var(--muted); font-size: 18px; max-width: 680px; margin: 0; }
-.privacy { display: inline-block; margin-top: 16px; padding: 10px 14px; background: var(--ok-soft); color: var(--ok); border-radius: 10px; font-size: 14px; }
-.drop { display: block; margin: 28px 0 12px; border: 2px dashed var(--line); border-radius: 16px; background: var(--surface); padding: 36px 20px; text-align: center; }
-.drop.over { border-color: var(--accent); background: var(--accent-soft); }
-.drop strong { display: block; font-size: 19px; margin-bottom: 6px; }
-.hint { color: var(--muted); font-size: 14px; }
-button { font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 10px; padding: 10px 16px; cursor: pointer; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-@media (prefers-color-scheme: dark) { button.primary { color: #0d1724; } }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 16px; }
-.error { color: var(--danger); background: var(--danger-soft); padding: 12px 14px; border-radius: 10px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 20px 0; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
-.card.best { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
-.card h3 { margin: 0 0 4px; font-size: 16px; }
-.big { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--ok-soft); color: var(--ok); margin-left: 6px; vertical-align: middle; }
-.rows { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
-.rows li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
-.rows b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.warn { padding: 10px 14px; border-radius: 10px; margin: 8px 0; font-size: 15px; }
-.warn.warn { background: var(--warn-soft); color: var(--warn); }
-.warn.danger { background: var(--danger-soft); color: var(--danger); }
-h2 { font-size: 22px; margin: 32px 0 8px; }
-.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-tr:last-child td { border-bottom: 0; }
-th { color: var(--muted); font-weight: 500; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-details { margin-top: 10px; }
-summary { cursor: pointer; color: var(--accent); }
-footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
-[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 var(--fs-base)/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: absolute; inset: 0 0 auto; height: 560px; background: var(--glow); pointer-events: none; z-index: -1; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-sm); }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 var(--s-4); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- шапка ---------- */
+.nav { display: flex; justify-content: space-between; align-items: center; padding: var(--s-6) 0; }
+.nav__brand { display: flex; align-items: center; gap: var(--s-2); font-weight: 700; letter-spacing: -.01em; text-decoration: none; color: var(--text); }
+.nav__logo { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent); font-size: 16px; }
+.nav__link { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; text-decoration: none; background: var(--surface); }
+.nav__link:hover { color: var(--text); border-color: var(--line-strong); }
+
+/* ---------- первый экран ---------- */
+.hero { text-align: center; padding: var(--s-12) 0 var(--s-8); }
+.hero__badge { display: inline-flex; gap: var(--s-2); align-items: center; padding: var(--s-1) var(--s-3); border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: var(--fs-sm); font-weight: 600; }
+.hero__title { font-size: var(--fs-hero); line-height: 1.08; letter-spacing: -.035em; font-weight: 700; margin: var(--s-4) auto var(--s-4); max-width: 780px; }
+.hero__title em { font-style: normal; color: var(--accent); }
+.hero__lead { color: var(--muted); font-size: var(--fs-md); line-height: 1.5; max-width: 620px; margin: 0 auto; }
+
+/* ---------- загрузка ---------- */
+.drop { display: block; position: relative; max-width: 720px; margin: var(--s-8) auto 0; padding: var(--s-12) var(--s-6); border: 1.5px dashed var(--line-strong); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-2); text-align: center; transition: border-color .15s, background-color .15s, transform .15s; }
+.drop:hover { border-color: var(--accent); }
+.drop--over { border-color: var(--accent); background: var(--accent-soft); transform: scale(1.01); }
+.drop__icon { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); margin-bottom: var(--s-4); }
+.drop__title { display: block; font-size: var(--fs-md); font-weight: 600; margin-bottom: var(--s-1); }
+.drop__hint { color: var(--muted); font-size: var(--fs-sm); }
+.drop__actions { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-6); }
+.drop__privacy { display: flex; justify-content: center; align-items: center; gap: var(--s-2); margin: var(--s-4) auto 0; color: var(--success); font-size: var(--fs-sm); font-weight: 500; }
+
+.btn { font: 600 15px/1 var(--font); border-radius: var(--r-sm); padding: var(--s-3) var(--s-6); cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); transition: background-color .15s, border-color .15s, transform .1s; }
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+.alert { max-width: 720px; margin: var(--s-4) auto 0; padding: var(--s-3) var(--s-4); border-radius: var(--r-sm); font-size: 15px; }
+.alert--error { background: var(--error-soft); color: var(--error); }
+.alert--warn { background: var(--warning-soft); color: var(--warning); }
+.alert--danger { background: var(--error-soft); color: var(--error); }
+.result .alert { max-width: none; margin: 0 0 var(--s-3); }
+
+/* ---------- как это работает ---------- */
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s-4); margin: var(--s-16) 0 0; padding: 0; list-style: none; counter-reset: step; }
+.steps__item { padding: var(--s-6); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); counter-increment: step; }
+.steps__item::before { content: counter(step); display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: var(--fs-sm); font-weight: 600; margin-bottom: var(--s-3); }
+.steps__item b { display: block; margin-bottom: var(--s-1); }
+.steps__item span { color: var(--muted); font-size: 15px; }
+
+/* ---------- результат ---------- */
+.result { margin-top: var(--s-12); scroll-margin-top: var(--s-6); }
+.section-title { font-size: var(--fs-lg); letter-spacing: -.02em; line-height: 1.2; margin: var(--s-12) 0 var(--s-4); }
+.section-title small { display: block; font-size: 15px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: var(--s-1); }
+
+.summary { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: var(--s-4); }
+@media (max-width: 820px) { .summary { grid-template-columns: 1fr; } }
+.card { position: relative; padding: var(--s-6); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-1); }
+.card--income { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.card--income .card__label, .card--income .card__rows li { color: inherit; opacity: .85; }
+.card--best { border-color: var(--success); box-shadow: 0 0 0 1px var(--success), var(--shadow-2); }
+.card__label { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); color: var(--muted); font-size: 15px; font-weight: 500; }
+.card__value { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.03em; line-height: 1.15; margin: var(--s-2) 0 var(--s-4); }
+.card__rows { margin: 0; padding: var(--s-4) 0 0; border-top: 1px solid var(--line); list-style: none; font-size: 14px; color: var(--muted); }
+.card--income .card__rows { border-color: color-mix(in srgb, var(--on-accent) 25%, transparent); color: inherit; }
+.card__rows li { display: flex; justify-content: space-between; gap: var(--s-3); padding: 3px 0; }
+.card__rows b { color: var(--text); font-weight: 600; white-space: nowrap; }
+.card--income .card__rows b { color: inherit; }
+.tag { display: inline-block; padding: 2px var(--s-2); border-radius: 99px; background: var(--success-soft); color: var(--success); font-size: 12px; font-weight: 600; }
+
+.chart { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); align-items: end; height: 220px; padding: var(--s-6) var(--s-6) 0; }
+.chart__col { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: var(--s-2); }
+.chart__value { font-size: var(--fs-sm); font-weight: 600; }
+.chart__bar { width: 100%; max-width: 96px; min-height: 4px; border-radius: var(--r-sm) var(--r-sm) 2px 2px; background: var(--accent); }
+.chart__labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); padding: var(--s-3) var(--s-6) var(--s-6); border-top: 1px solid var(--line); margin-top: var(--s-2); text-align: center; color: var(--muted); font-size: var(--fs-sm); }
+
+.panel { border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); overflow: hidden; }
+.panel__scroll { overflow-x: auto; }
+.timeline { margin: 0; padding: var(--s-2) 0; list-style: none; }
+.timeline__item { display: grid; grid-template-columns: 112px 1fr auto; gap: var(--s-4); align-items: center; padding: var(--s-4) var(--s-6); border-bottom: 1px solid var(--line); }
+.timeline__item:last-child { border-bottom: 0; }
+.timeline__date { font-weight: 600; }
+.timeline__what { color: var(--muted); }
+.timeline__sum { font-weight: 700; }
+@media (max-width: 560px) { .timeline__item { grid-template-columns: 1fr auto; } .timeline__what { grid-column: 1 / -1; grid-row: 2; } }
+
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th, .table td { text-align: left; padding: var(--s-3) var(--s-6); border-bottom: 1px solid var(--line); }
+.table tr:last-child td { border-bottom: 0; }
+.table th { color: var(--muted); font-weight: 500; background: var(--surface-2); font-size: var(--fs-sm); }
+.table td.table__sum { text-align: right; white-space: nowrap; font-weight: 600; }
+.table th.table__sum { text-align: right; }
+.table tr.is-muted td { color: var(--muted); }
+.table tr.is-muted td.table__sum { text-decoration: line-through; font-weight: 400; }
+.pill { display: inline-block; padding: 2px var(--s-2); border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill--income { background: var(--success-soft); color: var(--success); }
+.pill--check { background: var(--warning-soft); color: var(--warning); }
+.pill--excluded { background: var(--surface-2); color: var(--muted); }
+
+.footer { margin-top: var(--s-24); padding: var(--s-8) 0 var(--s-12); border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-4); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header class="top">
-    <span class="brand">🧾 nalog-helper</span>
-    <a href="https://github.com/codebywater/nalog-helper" rel="noopener">GitHub ★</a>
+  <header class="nav">
+    <a class="nav__brand" href="./"><span class="nav__logo" aria-hidden="true">₽</span>nalog-helper</a>
+    <a class="nav__link" href="https://github.com/codebywater/nalog-helper" rel="noopener">★ GitHub</a>
   </header>
 
-  <h1>Сколько налогов платить — по выписке из банка</h1>
-  <p class="lead">Для ИП на УСН «Доходы» 6% и самозанятых. Найдёт поступления, посчитает налог и взносы за год, покажет календарь платежей и предупредит о лимитах.</p>
-  <span class="privacy">🔒 Выписка не покидает компьютер: странице запрещено отправлять данные в интернет.</span>
+  <main>
+    <section class="hero">
+      <span class="hero__badge">Ставки и лимиты 2026 года</span>
+      <h1 class="hero__title">Сколько налогов платить — <em>по выписке из банка</em></h1>
+      <p class="hero__lead">Для ИП на УСН 6% и самозанятых. Налог, взносы, календарь платежей и предупреждения о лимитах за пару секунд.</p>
 
-  <label class="drop" id="drop">
-    <strong>Перетащите выписку в CSV</strong>
-    <span class="hint">Из любого банка: нужны колонки с датой, суммой и описанием</span>
-    <input type="file" id="file" accept=".csv,.txt,text/csv" hidden>
-    <div class="actions">
-      <button type="button" class="primary" id="pick">Выбрать файл</button>
-      <button type="button" id="demo">Посмотреть на примере</button>
-    </div>
-  </label>
-  <div id="error" class="error" hidden></div>
+      <label class="drop" id="drop">
+        <span class="drop__icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 0 4 4m-4-4L8 7"/><path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/></svg>
+        </span>
+        <span class="drop__title">Перетащите выписку сюда</span>
+        <span class="drop__hint">CSV из любого банка: Сбер, Т-Банк, Альфа, Точка, Модуль…</span>
+        <input type="file" id="file" accept=".csv,.txt,text/csv" hidden>
+        <span class="drop__actions">
+          <button type="button" class="btn btn--primary" id="pick">Выбрать файл</button>
+          <button type="button" class="btn" id="demo">Посмотреть на примере</button>
+        </span>
+      </label>
+      <p class="drop__privacy">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        Выписка не покидает компьютер: странице запрещено отправлять данные в интернет
+      </p>
+      <div id="error" class="alert alert--error" role="alert" hidden></div>
+    </section>
 
-  <section id="result" hidden>
-    <div id="warnings"></div>
-    <div class="grid" id="cards"></div>
-    <h2>Календарь платежей</h2>
-    <div class="table-wrap"><table><thead><tr><th>Срок</th><th>Что платить</th><th style="text-align:right">Сумма</th></tr></thead><tbody id="calendar"></tbody></table></div>
-    <h2>Поступления</h2>
-    <p class="hint">Проверьте, всё ли правильно определено. В доход не входят переводы между своими счетами, возвраты и кэшбэк.</p>
-    <div class="table-wrap"><table><thead><tr><th>Дата</th><th>От кого / за что</th><th>Статус</th><th style="text-align:right">Сумма</th></tr></thead><tbody id="ops"></tbody></table></div>
-  </section>
+    <ol class="steps" id="steps">
+      <li class="steps__item"><b>Скачайте выписку</b><span>В приложении банка: «Выписка» → формат CSV или Excel → сохраните как CSV.</span></li>
+      <li class="steps__item"><b>Загрузите сюда</b><span>Помощник найдёт поступления и отделит их от переводов себе и кэшбэка.</span></li>
+      <li class="steps__item"><b>Получите расчёт</b><span>Налог по УСН и НПД, взносы, сроки оплаты и что выгоднее именно вам.</span></li>
+    </ol>
 
-  <footer>
-    Расчёт ориентировочный и не заменяет бухгалтера. Учтены ставки и лимиты 2026 года; ИП без работников, без региональных льгот.
-    Открытый код, лицензия MIT · <a href="https://github.com/codebywater/nalog-helper" rel="noopener">GitHub</a>
+    <section class="result" id="result" hidden aria-live="polite">
+      <div id="warnings"></div>
+      <div class="summary" id="cards"></div>
+
+      <h2 class="section-title">Доход по кварталам</h2>
+      <div class="panel"><div class="chart" id="chart"></div><div class="chart__labels"><span>I кв.</span><span>II кв.</span><span>III кв.</span><span>IV кв.</span></div></div>
+
+      <h2 class="section-title">Календарь платежей<small>Для ИП на УСН 6%. Самозанятые платят налог до 28-го числа следующего месяца.</small></h2>
+      <div class="panel"><ol class="timeline" id="calendar"></ol></div>
+
+      <h2 class="section-title">Поступления<small>Проверьте, всё ли определено верно. Переводы себе, возвраты и кэшбэк в доход не входят.</small></h2>
+      <div class="panel panel__scroll">
+        <table class="table">
+          <thead><tr><th>Дата</th><th>От кого / за что</th><th>Статус</th><th class="table__sum">Сумма</th></tr></thead>
+          <tbody id="ops"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Расчёт ориентировочный и не заменяет бухгалтера. ИП без работников, без региональных льгот.</span>
+    <span>Открытый код, MIT · <a href="https://github.com/codebywater/nalog-helper" rel="noopener">GitHub</a></span>
   </footer>
 </div>
 <script src="nalog.js"></script>
