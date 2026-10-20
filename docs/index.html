@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Страница не может ничего отправить в сеть: запросы запрещены политикой безопасности. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Налоговый помощник</title>
+<meta name="description" content="Сколько налогов и взносов платить ИП на УСН 6% и самозанятому — по выписке из банка. Работает в браузере, выписка никуда не отправляется.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BE%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f6f7f4; --surface: #fff; --text: #1b1d1a; --muted: #686b64; --line: #e2e4dd;
+  --accent: #1f5fa8; --accent-soft: #e5eef9; --ok: #17694b; --ok-soft: #e2f2ea;
+  --warn: #8f5800; --warn-soft: #fcf1dc; --danger: #a12f29; --danger-soft: #fbe5e3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131512; --surface: #1c1e1b; --text: #eceee8; --muted: #a0a39b; --line: #30332e;
+    --accent: #7fb2ef; --accent-soft: #1b2a3c; --ok: #6fcf9f; --ok-soft: #1a3027;
+    --warn: #e8b660; --warn-soft: #35291a; --danger: #ef8b84; --danger-soft: #3a2220;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 16px 48px; }
+header.top { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; }
+.brand { font-weight: 700; }
+.top a, footer a { color: var(--muted); }
+h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.15; letter-spacing: -.02em; margin: 32px 0 12px; }
+.lead { color: var(--muted); font-size: 18px; max-width: 680px; margin: 0; }
+.privacy { display: inline-block; margin-top: 16px; padding: 10px 14px; background: var(--ok-soft); color: var(--ok); border-radius: 10px; font-size: 14px; }
+.drop { display: block; margin: 28px 0 12px; border: 2px dashed var(--line); border-radius: 16px; background: var(--surface); padding: 36px 20px; text-align: center; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop strong { display: block; font-size: 19px; margin-bottom: 6px; }
+.hint { color: var(--muted); font-size: 14px; }
+button { font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 10px; padding: 10px 16px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.primary { color: #0d1724; } }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 16px; }
+.error { color: var(--danger); background: var(--danger-soft); padding: 12px 14px; border-radius: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 20px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.card.best { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+.card h3 { margin: 0 0 4px; font-size: 16px; }
+.big { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--ok-soft); color: var(--ok); margin-left: 6px; vertical-align: middle; }
+.rows { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
+.rows li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.rows b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.warn { padding: 10px 14px; border-radius: 10px; margin: 8px 0; font-size: 15px; }
+.warn.warn { background: var(--warn-soft); color: var(--warn); }
+.warn.danger { background: var(--danger-soft); color: var(--danger); }
+h2 { font-size: 22px; margin: 32px 0 8px; }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { color: var(--muted); font-weight: 500; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--accent); }
+footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="brand">🧾 nalog-helper</span>
+    <a href="https://github.com/codebywater/nalog-helper" rel="noopener">GitHub ★</a>
+  </header>
+
+  <h1>Сколько налогов платить — по выписке из банка</h1>
+  <p class="lead">Для ИП на УСН «Доходы» 6% и самозанятых. Найдёт поступления, посчитает налог и взносы за год, покажет календарь платежей и предупредит о лимитах.</p>
+  <span class="privacy">🔒 Выписка не покидает компьютер: странице запрещено отправлять данные в интернет.</span>
+
+  <label class="drop" id="drop">
+    <strong>Перетащите выписку в CSV</strong>
+    <span class="hint">Из любого банка: нужны колонки с датой, суммой и описанием</span>
+    <input type="file" id="file" accept=".csv,.txt,text/csv" hidden>
+    <div class="actions">
+      <button type="button" class="primary" id="pick">Выбрать файл</button>
+      <button type="button" id="demo">Посмотреть на примере</button>
+    </div>
+  </label>
+  <div id="error" class="error" hidden></div>
+
+  <section id="result" hidden>
+    <div id="warnings"></div>
+    <div class="grid" id="cards"></div>
+    <h2>Календарь платежей</h2>
+    <div class="table-wrap"><table><thead><tr><th>Срок</th><th>Что платить</th><th style="text-align:right">Сумма</th></tr></thead><tbody id="calendar"></tbody></table></div>
+    <h2>Поступления</h2>
+    <p class="hint">Проверьте, всё ли правильно определено. В доход не входят переводы между своими счетами, возвраты и кэшбэк.</p>
+    <div class="table-wrap"><table><thead><tr><th>Дата</th><th>От кого / за что</th><th>Статус</th><th style="text-align:right">Сумма</th></tr></thead><tbody id="ops"></tbody></table></div>
+  </section>
+
+  <footer>
+    Расчёт ориентировочный и не заменяет бухгалтера. Учтены ставки и лимиты 2026 года; ИП без работников, без региональных льгот.
+    Открытый код, лицензия MIT · <a href="https://github.com/codebywater/nalog-helper" rel="noopener">GitHub</a>
+  </footer>
+</div>
+<script src="nalog.js"></script>
+<script src="demo.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
