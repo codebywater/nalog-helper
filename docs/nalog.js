@@ -3,9 +3,9 @@
  * Ничего никуда не отправляет: только разбор CSV и арифметика.
  */
 (function (root, factory) {
-  if (typeof module === "object" && module.exports) module.exports = factory();
-  else root.Nalog = factory();
-})(typeof self !== "undefined" ? self : this, function () {
+  if (typeof module === "object" && module.exports) module.exports = factory(require("./vypiska.js"));
+  else root.Nalog = factory(root.Vypiska);
+})(typeof self !== "undefined" ? self : this, function (Vypiska) {
   "use strict";
 
   // Параметры по годам. Те же значения сведены в таблицу в README («Откуда цифры»).
@@ -31,135 +31,13 @@
 
   // ---------- разбор выписки ----------
 
-  const HEADERS = {
-    // Дата поступления денег на счёт, а не дата документа (п. 1 ст. 346.17 НК РФ).
-    date: ["дата операции", "дата проводки", "дата поступления", "дата зачисления", "дата списания", "дата платежа", "дата", "date"],
-    credit: ["по кредиту", "приход", "зачисление", "поступление", "кредит", "credit"],
-    debit: ["по дебету", "расход", "списание", "дебет", "debit"],
-    // Сначала сумма в валюте счёта: у Т-Банка это «Сумма платежа», у ВТБ — «Сумма пересчитанная в валюту счета».
-    amount: ["сумма платежа", "сумма в валюте сч", "сумма пересчитанная в валют", "сумма операции", "сумма", "amount"],
-    currency: ["валюта платежа", "валюта счета", "валюта счёта", "валюта операции", "валюта", "currency"],
-    status: ["статус", "status"],
-    description: ["назначение платежа", "назначение", "описание", "основание", "контрагент", "плательщик", "description"],
-    payer: ["плательщик", "контрагент", "отправитель", "payer"],
-  };
-  const MONEY_KEYS = new Set(["credit", "debit", "amount"]);
-  // «Счет Кредит», «ИНН», «Банк» — это не суммы, даже если в названии есть «кредит».
-  const NOT_MONEY_HEADER = /сч[её]т|инн|бик|банк|наименован/;
-  // Остаток и баланс — не сумма операции, даже если «в валюте счёта».
-  const BALANCE_HEADER = /остат|баланс|сальдо|лимит|balance/;
-  const MONEY_HEADER = /сумм|оборот/;
-  const FAILED = /отклон|failed|declined|отмен|cancel|ошибк/i;
-  // «RUB», «Рубли», «Российский рубль (RUB)», код 643 или старый 810 — всё это рубли.
-  const RUB = /^$|^(rub|rur|₽|руб|рубл|российск|643|810)/i;
+  // Колонки, кодировки, суммы в валюте счёта, отклонённые и валютные операции разбирает
+  // библиотека vypiska (https://github.com/codebywater/vypiska), копия лежит рядом.
+  const parseAmount = Vypiska.parseAmount;
 
-  /*
-   * CSV целиком, а не построчно: Excel сохраняет ячейки с переносом строки
-   * («счёт / ИНН / название») в кавычках, и такая запись занимает несколько строк.
-   * Кавычка открывает поле только в его начале; внутри поля она обычный символ.
-   */
-  function parseCsv(text, delim, byLine = false) {
-    if (byLine) return text.split(/\r?\n/).flatMap((l) => parseCsv(l, delim));
-    const rows = [];
-    let row = [], cur = "", quoted = false;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (quoted) {
-        if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; }
-        else if (ch === '"') quoted = false;
-        else cur += ch;
-      } else if (ch === '"' && cur.trim() === "") { quoted = true; cur = ""; }
-      else if (ch === delim) { row.push(cur); cur = ""; }
-      else if (ch === "\n" || ch === "\r") {
-        if (ch === "\r" && text[i + 1] === "\n") i++;
-        row.push(cur); rows.push(row); row = []; cur = "";
-      } else cur += ch;
-    }
-    // Незакрытая кавычка съела бы остаток файла: тогда разбираем по строкам.
-    if (quoted && text.includes("\n")) return parseCsv(text, delim, true);
-    row.push(cur); rows.push(row);
-    return rows.map((r) => r.map((s) => s.replace(/\s*[\r\n]+\s*/g, " ").trim())).filter((r) => r.some(Boolean));
-  }
-
-  function findColumns(header) {
-    const lower = header.map((h) => h.toLowerCase().replace(/\s+/g, " "));
-    const cols = {};
-    const used = new Set();
-    const fits = (key, h) => !MONEY_KEYS.has(key) || !BALANCE_HEADER.test(h) && (!NOT_MONEY_HEADER.test(h) || MONEY_HEADER.test(h));
-    for (const key of ["date", "credit", "debit", "amount", "currency", "status", "description", "payer"]) {
-      for (const kw of HEADERS[key]) {
-        const idx = lower.findIndex((h, i) => !used.has(i) && h.includes(kw) && fits(key, h));
-        if (idx !== -1) { cols[key] = idx; used.add(idx); break; }
-      }
-    }
-    // Сумма уже в валюте счёта — значит «Валюта операции» к ней не относится.
-    if (cols.currency !== undefined && cols.amount !== undefined &&
-        /платеж|в валют[еу] сч/.test(lower[cols.amount]) && /операци/.test(lower[cols.currency])) delete cols.currency;
-    return cols;
-  }
-
-  const isHeader = (cols) => cols.date !== undefined && (cols.amount !== undefined || cols.credit !== undefined);
-
-  // Разделитель и шапку ищем вместе: заголовок «Выписка по счету …, ИП …» с запятой не должен решать за весь файл.
-  function findHeader(text) {
-    let best = null;
-    for (const delim of [";", ",", "\t"]) {
-      const rows = parseCsv(text, delim);
-      for (let i = 0; i < Math.min(rows.length, 50); i++) {
-        const cols = findColumns(rows[i]);
-        if (!isHeader(cols)) continue;
-        if (!best || i < best.idx || (i === best.idx && rows[i].length > best.rows[best.idx].length)) best = { rows, idx: i, cols };
-        break;
-      }
-    }
-    return best;
-  }
-
-  function parseAmount(s) {
-    if (s == null) return null;
-    let t = String(s).replace(/[−–—]/g, "-").replace(/руб\.?|р\.|rur|rub|₽|[\s  ']/gi, "").replace(/р$/i, "");
-    let neg = false;
-    const paren = /^\((.*)\)$/.exec(t);
-    if (paren) { neg = true; t = paren[1]; }
-    if (/^[^-+].*-$/.test(t)) { neg = true; t = t.slice(0, -1); }   // «1500,00-»
-    if (t.includes(",") && t.includes(".")) {
-      // Разделитель тысяч стоит первым: «1,500.00» или «1.500,00».
-      t = t.indexOf(",") < t.indexOf(".") ? t.replace(/,/g, "") : t.replace(/\./g, "").replace(",", ".");
-    } else if ((t.match(/,/g) || []).length > 1) t = t.replace(/,/g, "");
-    else if ((t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
-    else t = t.replace(",", ".");
-    if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(t)) return null;   // Сбер пишет копейки как «-,01»
-    // 15 и больше цифр — это номер счёта, а не сумма.
-    if (t.replace(/^[+-]/, "").split(".")[0].length >= 15) return null;
-    const n = Number(t);
-    return neg ? -Math.abs(n) : n;
-  }
-
-  const DMY = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})(?!\d)/;
-  const YMD = /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?!\d)/;
-
-  function validDate(y, m, d) {
-    if (m < 1 || m > 12 || d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return null;
-    return { y, m, d };
-  }
-
-  // order: "dmy" (как в российских банках) или "mdy" (Excel с американскими настройками).
-  function parseDate(s, order = "dmy") {
-    let m = DMY.exec(s);
-    if (m) {
-      const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
-      return order === "mdy" ? validDate(y, +m[1], +m[2]) : validDate(y, +m[2], +m[1]);
-    }
-    m = YMD.exec(s);
-    if (m) return validDate(+m[1], +m[2], +m[3]);
-    return null;
-  }
-
-  // Если «месяц» где-то больше 12, а «день» нигде не больше 12, файл записан как месяц/день/год.
-  function detectDateOrder(cells) {
-    const parts = cells.map((c) => DMY.exec(c)).filter(Boolean);
-    const firstOver = parts.some((m) => +m[1] > 12), secondOver = parts.some((m) => +m[2] > 12);
-    return secondOver && !firstOver ? "mdy" : "dmy";
+  function parseDate(s, order) {
+    const d = Vypiska.parseDate(s, order);
+    return d && { y: d.y, m: d.m, d: d.d };
   }
 
   function emptyStats() { return { badDate: 0, badAmount: 0, failed: 0, foreign: 0, mdyFiles: 0 }; }
@@ -169,45 +47,13 @@
    * чтобы ничего не терялось молча.
    */
   function parseStatementInfo(text) {
-    text = String(text).replace(/^﻿/, "");
-    if (text.split(/\r?\n/).filter((l) => l.trim()).length < 2) throw new Error("В файле нет строк с операциями.");
-    const found = findHeader(text);
-    if (!found) {
-      const anyDate = [";", ",", "\t"].some((d) => parseCsv(text, d).slice(0, 50).some((r) => findColumns(r).date !== undefined));
-      throw new Error(anyDate ? "Не нашёл колонку с суммой или поступлениями." : "Не нашёл колонку с датой. Нужна шапка вида «Дата;Сумма;Описание».");
-    }
-    const { rows, idx, cols } = found;
-    const data = rows.slice(idx + 1);
-    const order = detectDateOrder(data.map((r) => r[cols.date] || ""));
-    const stats = emptyStats();
-    if (order === "mdy") stats.mdyFiles = 1;
-    const moneyCols = [cols.credit, cols.debit, cols.amount].filter((c) => c !== undefined);
-
-    const ops = [];
-    for (const row of data) {
-      const cell = row[cols.date] || "";
-      const date = parseDate(cell, order);
-      if (!date) { if (DMY.test(cell) || YMD.test(cell)) stats.badDate++; continue; }
-      if (cols.status !== undefined && FAILED.test(row[cols.status] || "")) { stats.failed++; continue; }
-      let amount = null;
-      if (cols.credit !== undefined || cols.debit !== undefined) {
-        const credit = cols.credit !== undefined ? parseAmount(row[cols.credit]) : null;
-        const debit = cols.debit !== undefined ? parseAmount(row[cols.debit]) : null;
-        if (credit) amount = Math.abs(credit);
-        else if (debit) amount = -Math.abs(debit);
-      }
-      if (amount === null && cols.amount !== undefined) amount = parseAmount(row[cols.amount]);
-      if (amount === null) {
-        if (moneyCols.some((c) => (row[c] || "").trim() && parseAmount(row[c]) === null)) stats.badAmount++;
-        continue;
-      }
-      if (!amount) continue;
-      if (cols.currency !== undefined && !RUB.test((row[cols.currency] || "").trim())) { stats.foreign++; continue; }
-      const description = cols.description !== undefined ? row[cols.description] || "" : "";
-      const payer = cols.payer !== undefined ? row[cols.payer] || "" : "";
-      ops.push({ date, amount, description, payer });
-    }
-    return { ops, stats };
+    const r = Vypiska.parse(text);
+    const ops = r.ops.map((o) => {
+      const [y, m, d] = o.date.split("-").map(Number);
+      return { date: { y, m, d }, amount: o.amount, description: o.description, payer: o.counterparty };
+    });
+    const { badDate, badAmount, failed, foreign } = r.stats;
+    return { ops, stats: { badDate, badAmount, failed, foreign, mdyFiles: r.stats.dateOrder === "mdy" ? 1 : 0 } };
   }
 
   function parseStatement(text) { return parseStatementInfo(text).ops; }
@@ -218,18 +64,7 @@
     return out;
   }
 
-  /*
-   * Байты файла → текст. Банки отдают CSV в UTF-8 или Windows-1251. Один битый
-   * байт в UTF-8 не повод перекодировать весь файл: берём ту кодировку,
-   * в которой выписка разбирается лучше.
-   */
-  function decodeStatement(bytes) {
-    const utf8 = new TextDecoder("utf-8").decode(bytes);
-    if (!utf8.includes("�")) return utf8;
-    const cp1251 = new TextDecoder("windows-1251").decode(bytes);
-    const score = (t) => { try { return parseStatement(t).length; } catch (e) { return -1; } };
-    return score(cp1251) > score(utf8) ? cp1251 : utf8;
-  }
+  const decodeStatement = (bytes) => Vypiska.decode(bytes);
 
   // ---------- что считать доходом ----------
 

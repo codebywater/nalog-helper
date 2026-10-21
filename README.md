@@ -83,7 +83,7 @@ npm test                         # тесты на встроенном node:tes
 python3 -m http.server -d docs   # открыть страницу на http://localhost:8000
 ```
 
-Ядро расчёта — [docs/nalog.js](docs/nalog.js): работает и в браузере, и в Node. Интерфейс — [docs/app.js](docs/app.js). Пример выписки — [examples/vypiska-primer.csv](examples/vypiska-primer.csv).
+Выписку разбирает библиотека [vypiska](https://github.com/codebywater/vypiska) (копия в [docs/vypiska.js](docs/vypiska.js)): колонки, кодировки, суммы в рублях, отклонённые и валютные операции. Ядро расчёта — [docs/nalog.js](docs/nalog.js): работает и в браузере, и в Node. Интерфейс — [docs/app.js](docs/app.js). Пример выписки — [examples/vypiska-primer.csv](examples/vypiska-primer.csv).
 
 ## Планы
 
