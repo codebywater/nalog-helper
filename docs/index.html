@@ -8,7 +8,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <title>Налоговый помощник</title>
-<meta name="description" content="Сколько налогов и взносов платить ИП на УСН 6% и самозанятому — по выписке из банка. Работает в браузере, выписка никуда не отправляется.">
+<meta name="description" content="Сколько налогов и взносов платить ИП на УСН 6% и 15% и самозанятому — по выписке из банка. Работает в браузере, выписка никуда не отправляется.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%BE%3C/text%3E%3C/svg%3E">
 <style>
 /* ---------- токены ---------- */
@@ -58,6 +58,8 @@ a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-sm); }
 .wrap { max-width: 1040px; margin: 0 auto; padding: 0 var(--s-4); }
 .num { font-variant-numeric: tabular-nums; }
+/* display у .steps и других блоков иначе перебивает атрибут hidden */
+[hidden] { display: none !important; }
 
 /* ---------- шапка ---------- */
 .nav { display: flex; justify-content: space-between; align-items: center; padding: var(--s-6) 0; }
@@ -154,6 +156,7 @@ a { color: var(--accent); }
 .pill--income { background: var(--success-soft); color: var(--success); }
 .pill--check { background: var(--warning-soft); color: var(--warning); }
 .pill--excluded { background: var(--surface-2); color: var(--muted); }
+.pill--refund { background: var(--warning-soft); color: var(--warning); }
 
 .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s-4) var(--s-6); padding: var(--s-6); }
 .field { display: flex; flex-direction: column; gap: var(--s-2); font-size: 14px; font-weight: 500; }
@@ -225,7 +228,7 @@ a { color: var(--accent); }
       <form class="panel settings" id="settings" novalidate>
         <label class="field">Расходы за год, ₽
           <input type="number" id="opt-expenses" min="0" step="1000" inputmode="numeric">
-          <span class="field__hint" id="opt-expenses-hint">Для УСН 15%. По умолчанию — расходы из выписки.</span>
+          <span class="field__hint" id="opt-expenses-hint">Для УСН 15%, без взносов за работников. По умолчанию — расходы из выписки.</span>
         </label>
         <label class="field">Ставка УСН «Доходы минус расходы», %
           <input type="number" id="opt-rate" min="1" max="15" step="1" value="15" inputmode="numeric">
@@ -234,15 +237,19 @@ a { color: var(--accent); }
         <div class="field">
           <label class="check"><input type="checkbox" id="opt-staff"> Есть работники</label>
           <input type="number" id="opt-staff-sum" min="0" step="1000" placeholder="Взносы за работников за год, ₽" aria-label="Взносы за работников за год, ₽" disabled inputmode="numeric">
-          <span class="field__hint">Налог на УСН 6% уменьшится не больше чем наполовину.</span>
+          <span class="field__hint" id="opt-staff-hint">УСН 6% уменьшится не больше чем наполовину, для УСН 15% взносы войдут в расходы. НПД с работниками недоступен.</span>
         </div>
+        <label class="field">Остаток вычета НПД, ₽
+          <input type="number" id="opt-npd-left" min="0" max="10000" step="100" value="10000" inputmode="numeric">
+          <span class="field__hint">Вычет 10 000 ₽ даётся один раз за всё время. Если вы уже были самозанятым, возьмите остаток из «Мой налог».</span>
+        </label>
       </form>
 
       <h2 class="section-title">Доход по кварталам</h2>
       <div class="panel"><div class="chart" id="chart"></div><div class="chart__labels"><span>I кв.</span><span>II кв.</span><span>III кв.</span><span>IV кв.</span></div></div>
 
       <div class="toolbar">
-        <h2 class="section-title">Календарь платежей<small>Самозанятые платят налог до 28-го числа следующего месяца.</small></h2>
+        <h2 class="section-title">Календарь платежей<small>Уведомления об авансах по УСН — до 25-го числа, платежи — до 28-го. Самозанятые платят налог до 28-го числа следующего месяца.</small></h2>
         <div class="toolbar__actions">
           <div class="segmented" role="group" aria-label="Режим для календаря">
             <button type="button" class="segmented__btn" data-regime="usn6" aria-pressed="true">УСН 6%</button>
@@ -253,7 +260,7 @@ a { color: var(--accent); }
       </div>
       <div class="panel"><ol class="timeline" id="calendar"></ol></div>
 
-      <h2 class="section-title">Операции<small>Проверьте, всё ли определено верно. Переводы себе, возвраты и кэшбэк в доход не входят; налоги и снятие наличных — в расходы.</small></h2>
+      <h2 class="section-title">Операции<small>Проверьте, всё ли определено верно. Переводы себе, возвраты вам и кэшбэк в доход не входят; возвраты покупателям уменьшают доход; налоги, переводы себе и снятие наличных — не расходы.</small></h2>
       <div class="panel panel__scroll">
         <table class="table">
           <thead><tr><th>Дата</th><th>От кого / за что</th><th>Статус</th><th class="table__sum">Сумма</th></tr></thead>

@@ -5,7 +5,6 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const day = (d) => `${String(d.d).padStart(2, "0")}.${String(d.m).padStart(2, "0")}.${d.y}`;
   const short = (n) => n >= 1e6 ? (n / 1e6).toFixed(1).replace(".", ",") + " млн" : Math.round(n / 1000) + " тыс.";
-  const num = (el) => (el.value.trim() === "" ? null : Math.max(0, Number(el.value)));
 
   let statement = null;   // текст выписки, чтобы пересчитывать без повторной загрузки
   let result = null;
@@ -20,13 +19,10 @@
   }
 
   function options() {
-    const staff = $("opt-staff").checked;
-    const rate = num($("opt-rate"));
-    return {
-      expenses: num($("opt-expenses")),
-      employeeContributions: staff ? num($("opt-staff-sum")) || 0 : 0,
-      usn15Rate: rate ? Math.min(rate, 15) / 100 : 0.15,
-    };
+    return Nalog.formOptions({
+      expenses: $("opt-expenses").value, rate: $("opt-rate").value,
+      staff: $("opt-staff").checked, staffSum: $("opt-staff-sum").value, npdLeft: $("opt-npd-left").value,
+    });
   }
 
   function load(text) {
@@ -60,7 +56,13 @@
         rows: [["База: доходы − расходы", fmt(Math.max(0, u15.income - u15.expenses))], ["Взносы за себя", fmt(u15.contributions.total)],
           [u15.minimumTaxApplied ? "Минимальный налог 1%" : "Налог", fmt(u15.tax)]] }) +
       card({ label: "Самозанятый (НПД)", value: r.npdAllowed ? fmt(n.total) : "недоступно", ...best("npd"),
-        rows: [["Ставка", "4% / 6%"], ["Остаток вычета", fmt(n.deductionLeft)], ["Пенсионный стаж", "не идёт"]] });
+        rows: [["Ставка", "4% / 6%"], ["Вычет учтён", `${fmt(n.deductionStart - n.deductionLeft)} из ${fmt(n.deductionStart)}`],
+          ["Пенсионный стаж", "не идёт"]] });
+
+    // Работники отмечены, а сумма взносов не указана — подсказываем, что посчитано без неё.
+    $("opt-staff-hint").textContent = r.hasEmployees && !r.employeeContributions
+      ? "Укажите взносы за работников: пока УСН 6% уменьшен только на ваши взносы, а НПД недоступен."
+      : "УСН 6% уменьшится не больше чем наполовину, для УСН 15% взносы войдут в расходы. НПД с работниками недоступен.";
 
     $("opt-expenses").placeholder = Nalog.fmt(r.foundExpenses);
     $("opt-expenses-hint").textContent = r.expensesManual
@@ -69,7 +71,8 @@
 
     // Доход по кварталам: из накопленных сумм УСН получаем приросты.
     const cum = u.periods.map((p) => p.income);
-    const quarters = cum.map((v, i) => v - (i ? cum[i - 1] : 0));
+    // Возврат покупателю может сделать квартал отрицательным: столбик тогда пустой.
+    const quarters = cum.map((v, i) => Math.max(0, v - (i ? cum[i - 1] : 0)));
     const max = Math.max(...quarters, 1);
     $("chart").innerHTML = quarters.map((q) =>
       `<div class="chart__col"><span class="chart__value num">${q ? short(q) : "—"}</span>` +
@@ -78,11 +81,11 @@
     if (!calendarRegime) calendarRegime = r.cheaper === "usn15" ? "usn15" : "usn6";
     renderCalendar();
 
-    const label = { income: "доход", check: "проверить", excluded: "не доход", expense: "расход", "not-expense": "не расход" };
-    const all = [...r.income, ...r.check, ...r.excluded, ...r.expenses, ...r.notExpenses].sort((a, b) =>
+    const label = { income: "доход", check: "проверить", excluded: "не доход", expense: "расход", "not-expense": "не расход", refund: "возврат покупателю" };
+    const all = [...r.income, ...r.check, ...r.excluded, ...r.expenses, ...r.notExpenses, ...r.refunds].sort((a, b) =>
       (a.date.y - b.date.y) || (a.date.m - b.date.m) || (a.date.d - b.date.d));
     $("ops").innerHTML = all.map((o) => {
-      const out = o.kind === "expense" || o.kind === "not-expense";
+      const out = o.kind === "expense" || o.kind === "not-expense" || o.kind === "refund";
       const muted = o.kind === "excluded" || o.kind === "not-expense";
       return `<tr class="${muted ? "is-muted" : ""}"><td class="num">${day(o.date)}</td>` +
         `<td>${esc([o.payer, o.description].filter(Boolean).join(" — "))}</td>` +
@@ -99,7 +102,7 @@
     document.querySelectorAll(".segmented__btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.regime === calendarRegime)));
     $("calendar").innerHTML = result.calendars[calendarRegime].map((c) =>
       `<li class="timeline__item"><span class="timeline__date num">${c.date}</span>` +
-      `<span class="timeline__what">${esc(c.what)}</span><span class="timeline__sum num">${fmt(c.sum)}</span></li>`).join("");
+      `<span class="timeline__what">${esc(c.what)}</span><span class="timeline__sum num">${c.sum == null ? "подать" : fmt(c.sum)}</span></li>`).join("");
   }
 
   function downloadIcs() {
@@ -115,17 +118,9 @@
 
   function readFile(file) {
     const reader = new FileReader();
-    reader.onload = () => {
-      // Банки часто отдают CSV в Windows-1251: если UTF-8 не прочитался, пробуем её.
-      if (reader.result.includes("�")) {
-        const r2 = new FileReader();
-        r2.onload = () => load(r2.result);
-        r2.readAsText(file, "windows-1251");
-        return;
-      }
-      load(reader.result);
-    };
-    reader.readAsText(file, "utf-8");
+    // Банки отдают CSV в UTF-8 или Windows-1251: ядро выбирает ту, в которой выписка читается.
+    reader.onload = () => load(Nalog.decodeStatement(new Uint8Array(reader.result)));
+    reader.readAsArrayBuffer(file);
   }
 
   $("pick").addEventListener("click", (e) => { e.preventDefault(); $("file").click(); });

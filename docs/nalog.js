@@ -8,7 +8,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  // Параметры по годам. Источники — в README («Откуда цифры»).
+  // Параметры по годам. Те же значения сведены в таблицу в README («Откуда цифры»).
   const PARAMS = {
     2026: {
       fixedContributions: 57390,   // фиксированные взносы ИП за себя
@@ -32,131 +32,270 @@
   // ---------- разбор выписки ----------
 
   const HEADERS = {
-    date: ["дата операции", "дата проводки", "дата", "date"],
-    amount: ["сумма операции", "сумма в валюте счета", "сумма в валюте счёта", "сумма", "amount"],
-    credit: ["приход", "зачисление", "поступление", "кредит", "credit"],
-    debit: ["расход", "списание", "дебет", "debit"],
-    description: ["назначение платежа", "назначение", "описание", "контрагент", "плательщик", "description"],
+    // Дата поступления денег на счёт, а не дата документа (п. 1 ст. 346.17 НК РФ).
+    date: ["дата операции", "дата проводки", "дата поступления", "дата зачисления", "дата списания", "дата платежа", "дата", "date"],
+    credit: ["по кредиту", "приход", "зачисление", "поступление", "кредит", "credit"],
+    debit: ["по дебету", "расход", "списание", "дебет", "debit"],
+    // Сначала сумма в валюте счёта: у Т-Банка это «Сумма платежа», у ВТБ — «Сумма пересчитанная в валюту счета».
+    amount: ["сумма платежа", "сумма в валюте сч", "сумма пересчитанная в валют", "сумма операции", "сумма", "amount"],
+    currency: ["валюта платежа", "валюта счета", "валюта счёта", "валюта операции", "валюта", "currency"],
+    status: ["статус", "status"],
+    description: ["назначение платежа", "назначение", "описание", "основание", "контрагент", "плательщик", "description"],
     payer: ["плательщик", "контрагент", "отправитель", "payer"],
   };
+  const MONEY_KEYS = new Set(["credit", "debit", "amount"]);
+  // «Счет Кредит», «ИНН», «Банк» — это не суммы, даже если в названии есть «кредит».
+  const NOT_MONEY_HEADER = /сч[её]т|инн|бик|банк|наименован/;
+  // Остаток и баланс — не сумма операции, даже если «в валюте счёта».
+  const BALANCE_HEADER = /остат|баланс|сальдо|лимит|balance/;
+  const MONEY_HEADER = /сумм|оборот/;
+  const FAILED = /отклон|failed|declined|отмен|cancel|ошибк/i;
+  // «RUB», «Рубли», «Российский рубль (RUB)», код 643 или старый 810 — всё это рубли.
+  const RUB = /^$|^(rub|rur|₽|руб|рубл|российск|643|810)/i;
 
-  function detectDelimiter(line) {
-    const counts = [";", ",", "\t"].map((d) => [d, line.split(d).length]);
-    counts.sort((a, b) => b[1] - a[1]);
-    return counts[0][0];
-  }
-
-  function splitCsvLine(line, delim) {
-    const out = [];
-    let cur = "", quoted = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
+  /*
+   * CSV целиком, а не построчно: Excel сохраняет ячейки с переносом строки
+   * («счёт / ИНН / название») в кавычках, и такая запись занимает несколько строк.
+   * Кавычка открывает поле только в его начале; внутри поля она обычный символ.
+   */
+  function parseCsv(text, delim, byLine = false) {
+    if (byLine) return text.split(/\r?\n/).flatMap((l) => parseCsv(l, delim));
+    const rows = [];
+    let row = [], cur = "", quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
       if (quoted) {
-        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; }
         else if (ch === '"') quoted = false;
         else cur += ch;
-      } else if (ch === '"') quoted = true;
-      else if (ch === delim) { out.push(cur); cur = ""; }
-      else cur += ch;
+      } else if (ch === '"' && cur.trim() === "") { quoted = true; cur = ""; }
+      else if (ch === delim) { row.push(cur); cur = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cur); rows.push(row); row = []; cur = "";
+      } else cur += ch;
     }
-    out.push(cur);
-    return out.map((s) => s.trim());
+    // Незакрытая кавычка съела бы остаток файла: тогда разбираем по строкам.
+    if (quoted && text.includes("\n")) return parseCsv(text, delim, true);
+    row.push(cur); rows.push(row);
+    return rows.map((r) => r.map((s) => s.replace(/\s*[\r\n]+\s*/g, " ").trim())).filter((r) => r.some(Boolean));
   }
 
   function findColumns(header) {
-    const lower = header.map((h) => h.toLowerCase());
+    const lower = header.map((h) => h.toLowerCase().replace(/\s+/g, " "));
     const cols = {};
     const used = new Set();
-    for (const key of ["date", "credit", "debit", "amount", "description", "payer"]) {
+    const fits = (key, h) => !MONEY_KEYS.has(key) || !BALANCE_HEADER.test(h) && (!NOT_MONEY_HEADER.test(h) || MONEY_HEADER.test(h));
+    for (const key of ["date", "credit", "debit", "amount", "currency", "status", "description", "payer"]) {
       for (const kw of HEADERS[key]) {
-        const idx = lower.findIndex((h, i) => !used.has(i) && h.includes(kw));
+        const idx = lower.findIndex((h, i) => !used.has(i) && h.includes(kw) && fits(key, h));
         if (idx !== -1) { cols[key] = idx; used.add(idx); break; }
       }
     }
+    // Сумма уже в валюте счёта — значит «Валюта операции» к ней не относится.
+    if (cols.currency !== undefined && cols.amount !== undefined &&
+        /платеж|в валют[еу] сч/.test(lower[cols.amount]) && /операци/.test(lower[cols.currency])) delete cols.currency;
     return cols;
+  }
+
+  const isHeader = (cols) => cols.date !== undefined && (cols.amount !== undefined || cols.credit !== undefined);
+
+  // Разделитель и шапку ищем вместе: заголовок «Выписка по счету …, ИП …» с запятой не должен решать за весь файл.
+  function findHeader(text) {
+    let best = null;
+    for (const delim of [";", ",", "\t"]) {
+      const rows = parseCsv(text, delim);
+      for (let i = 0; i < Math.min(rows.length, 50); i++) {
+        const cols = findColumns(rows[i]);
+        if (!isHeader(cols)) continue;
+        if (!best || i < best.idx || (i === best.idx && rows[i].length > best.rows[best.idx].length)) best = { rows, idx: i, cols };
+        break;
+      }
+    }
+    return best;
   }
 
   function parseAmount(s) {
     if (s == null) return null;
-    const clean = String(s).replace(/[\s ₽]|руб\.?|RUB/gi, "").replace(",", ".");
-    if (clean === "" || clean === "-") return null;
-    const n = Number(clean);
-    return Number.isFinite(n) ? n : null;
+    let t = String(s).replace(/[−–—]/g, "-").replace(/руб\.?|р\.|rur|rub|₽|[\s  ']/gi, "").replace(/р$/i, "");
+    let neg = false;
+    const paren = /^\((.*)\)$/.exec(t);
+    if (paren) { neg = true; t = paren[1]; }
+    if (/^[^-+].*-$/.test(t)) { neg = true; t = t.slice(0, -1); }   // «1500,00-»
+    if (t.includes(",") && t.includes(".")) {
+      // Разделитель тысяч стоит первым: «1,500.00» или «1.500,00».
+      t = t.indexOf(",") < t.indexOf(".") ? t.replace(/,/g, "") : t.replace(/\./g, "").replace(",", ".");
+    } else if ((t.match(/,/g) || []).length > 1) t = t.replace(/,/g, "");
+    else if ((t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
+    else t = t.replace(",", ".");
+    if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(t)) return null;   // Сбер пишет копейки как «-,01»
+    // 15 и больше цифр — это номер счёта, а не сумма.
+    if (t.replace(/^[+-]/, "").split(".")[0].length >= 15) return null;
+    const n = Number(t);
+    return neg ? -Math.abs(n) : n;
   }
 
-  function parseDate(s) {
-    let m = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/.exec(s);
-    if (m) return { y: +m[3], m: +m[2], d: +m[1] };
-    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-    if (m) return { y: +m[1], m: +m[2], d: +m[3] };
+  const DMY = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})(?!\d)/;
+  const YMD = /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?!\d)/;
+
+  function validDate(y, m, d) {
+    if (m < 1 || m > 12 || d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return null;
+    return { y, m, d };
+  }
+
+  // order: "dmy" (как в российских банках) или "mdy" (Excel с американскими настройками).
+  function parseDate(s, order = "dmy") {
+    let m = DMY.exec(s);
+    if (m) {
+      const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+      return order === "mdy" ? validDate(y, +m[1], +m[2]) : validDate(y, +m[2], +m[1]);
+    }
+    m = YMD.exec(s);
+    if (m) return validDate(+m[1], +m[2], +m[3]);
     return null;
   }
 
-  function parseStatement(text) {
-    const lines = text.replace(/^﻿/, "").split(/\r?\n/).filter((l) => l.trim());
-    if (lines.length < 2) throw new Error("В файле нет строк с операциями.");
-    const delim = detectDelimiter(lines[0]);
-    // Шапка может быть не в первой строке: ищем строку с колонкой даты.
-    let headerIdx = 0, cols = {};
-    for (let i = 0; i < Math.min(lines.length, 15); i++) {
-      cols = findColumns(splitCsvLine(lines[i], delim));
-      if (cols.date !== undefined && (cols.amount !== undefined || cols.credit !== undefined)) { headerIdx = i; break; }
+  // Если «месяц» где-то больше 12, а «день» нигде не больше 12, файл записан как месяц/день/год.
+  function detectDateOrder(cells) {
+    const parts = cells.map((c) => DMY.exec(c)).filter(Boolean);
+    const firstOver = parts.some((m) => +m[1] > 12), secondOver = parts.some((m) => +m[2] > 12);
+    return secondOver && !firstOver ? "mdy" : "dmy";
+  }
+
+  function emptyStats() { return { badDate: 0, badAmount: 0, failed: 0, foreign: 0, mdyFiles: 0 }; }
+
+  /*
+   * Разбор одной выписки: операции и счётчики пропущенных строк,
+   * чтобы ничего не терялось молча.
+   */
+  function parseStatementInfo(text) {
+    text = String(text).replace(/^﻿/, "");
+    if (text.split(/\r?\n/).filter((l) => l.trim()).length < 2) throw new Error("В файле нет строк с операциями.");
+    const found = findHeader(text);
+    if (!found) {
+      const anyDate = [";", ",", "\t"].some((d) => parseCsv(text, d).slice(0, 50).some((r) => findColumns(r).date !== undefined));
+      throw new Error(anyDate ? "Не нашёл колонку с суммой или поступлениями." : "Не нашёл колонку с датой. Нужна шапка вида «Дата;Сумма;Описание».");
     }
-    if (cols.date === undefined) throw new Error("Не нашёл колонку с датой. Нужна шапка вида «Дата;Сумма;Описание».");
-    if (cols.amount === undefined && cols.credit === undefined) throw new Error("Не нашёл колонку с суммой или поступлениями.");
+    const { rows, idx, cols } = found;
+    const data = rows.slice(idx + 1);
+    const order = detectDateOrder(data.map((r) => r[cols.date] || ""));
+    const stats = emptyStats();
+    if (order === "mdy") stats.mdyFiles = 1;
+    const moneyCols = [cols.credit, cols.debit, cols.amount].filter((c) => c !== undefined);
 
     const ops = [];
-    for (const line of lines.slice(headerIdx + 1)) {
-      const row = splitCsvLine(line, delim);
-      const date = parseDate(row[cols.date] || "");
-      if (!date) continue;
+    for (const row of data) {
+      const cell = row[cols.date] || "";
+      const date = parseDate(cell, order);
+      if (!date) { if (DMY.test(cell) || YMD.test(cell)) stats.badDate++; continue; }
+      if (cols.status !== undefined && FAILED.test(row[cols.status] || "")) { stats.failed++; continue; }
       let amount = null;
-      if (cols.credit !== undefined) {
-        const credit = parseAmount(row[cols.credit]);
+      if (cols.credit !== undefined || cols.debit !== undefined) {
+        const credit = cols.credit !== undefined ? parseAmount(row[cols.credit]) : null;
         const debit = cols.debit !== undefined ? parseAmount(row[cols.debit]) : null;
         if (credit) amount = Math.abs(credit);
         else if (debit) amount = -Math.abs(debit);
       }
       if (amount === null && cols.amount !== undefined) amount = parseAmount(row[cols.amount]);
+      if (amount === null) {
+        if (moneyCols.some((c) => (row[c] || "").trim() && parseAmount(row[c]) === null)) stats.badAmount++;
+        continue;
+      }
       if (!amount) continue;
-      const description = cols.description !== undefined ? row[cols.description] : "";
-      const payer = cols.payer !== undefined ? row[cols.payer] : "";
+      if (cols.currency !== undefined && !RUB.test((row[cols.currency] || "").trim())) { stats.foreign++; continue; }
+      const description = cols.description !== undefined ? row[cols.description] || "" : "";
+      const payer = cols.payer !== undefined ? row[cols.payer] || "" : "";
       ops.push({ date, amount, description, payer });
     }
-    return ops;
+    return { ops, stats };
+  }
+
+  function parseStatement(text) { return parseStatementInfo(text).ops; }
+
+  function mergeStats(list) {
+    const out = emptyStats();
+    for (const s of list) for (const k of Object.keys(out)) out[k] += (s && s[k]) || 0;
+    return out;
+  }
+
+  /*
+   * Байты файла → текст. Банки отдают CSV в UTF-8 или Windows-1251. Один битый
+   * байт в UTF-8 не повод перекодировать весь файл: берём ту кодировку,
+   * в которой выписка разбирается лучше.
+   */
+  function decodeStatement(bytes) {
+    const utf8 = new TextDecoder("utf-8").decode(bytes);
+    if (!utf8.includes("�")) return utf8;
+    const cp1251 = new TextDecoder("windows-1251").decode(bytes);
+    const score = (t) => { try { return parseStatement(t).length; } catch (e) { return -1; } };
+    return score(cp1251) > score(utf8) ? cp1251 : utf8;
   }
 
   // ---------- что считать доходом ----------
 
+  // Поступления от эквайринга: банк перечисляет выручку по картам за вычетом комиссии.
+  const ACQUIRING = /эквайринг|мерчант|дата реестра|возмещение по (операциям|торгов)/i;
+  // Перевод своих денег: между своими счетами, с личной карты, «собственные средства», вывод прибыли.
+  const SELF = /между (своими|собственными) счетами|собственн\S*\s+(денежн\S*\s+)?средств|(на|в) (свой|свою|собственный|собственную|личн\S*) (сч[её]т|карту)|со? (своего|собственного|личного) сч[её]та|со? (своей|собственной|личной) карты|вывод прибыли|на личные (нужды|цели)/i;
+  // «Оплата за счет собственных средств учреждения» — так пишут заказчики-бюджетники, это доход.
+  const OWN_FUNDS_OF_PAYER = /за сч[её]т\s+(собственн|своих)\S*\s+(денежн\S*\s+)?средств\S*/gi;
+  // Слова про возврат, которые возвратом не являются.
+  const NOT_REFUND = /без возврата|возврату не подлежит|не подлежит возврату|подлежит возврату|невозвратн\S*/gi;
   const NOT_INCOME = [
-    /между (своими|собственными) счетами/i, /собственных средств/i, /со своего счета|со своей карты/i,
-    /возврат/i, /кэшбэк|кешбэк|cashback/i, /выдача кредита|кредитн|займ|заём/i,
+    /(^|[^\p{L}])возврат\S*\s+(ошибочно|излишне|займа|кредита|аванса|предоплат|депозита|(денежных\s+)?средств|платеж|оплат|комисси|налог|госпошлин|покупк|товар|по операции|переплат|неиспольз|остатк)/iu,
+    /кэшбэк|кешбэк|cashback/i, /выдача кредита|кредитн|займ|заём/i,
     /пополнение (счета )?наличными|взнос наличных/i, /ошибочно/i,
   ];
   const CHECK = [/процент/i, /перевод/i, /сбп/i];
   // \b в JavaScript не понимает кириллицу, поэтому граница слова задаётся явно.
-  const LEGAL = /(?<!\p{L})(ооо|оао|зао|пао|ао|ип|гбу|муп|фгуп)(?!\p{L})|ozon|wildberries|вайлдберриз|озон|яндекс/iu;
+  const LEGAL = /(?<!\p{L})(ооо|оао|зао|пао|нао|ао|ип|гбу|гку|гау|муп|фгуп|ано|ooo|llc|ltd|inc|gmbh|corp|limited|plc)(?!\p{L})|общество с ограниченной ответственностью|акционерное общество|индивидуальн\S* предпринимател|(государственное|муниципальное) (бюджетное|казенное|казённое|автономное|унитарное)|ozon|wildberries|вайлдберриз|озон|яндекс/iu;
+  // ИНН из 10 цифр бывает только у организаций.
+  const LEGAL_INN = /инн\s*:?\s*\d{10}(?!\d)/i;
+  const PAYER_IP = /(?<!\p{L})ип(?!\p{L})|индивидуальн\S* предпринимател/iu;
+
+  const isLegal = (text) => LEGAL.test(text.replace(/[«»"]/g, " ")) || LEGAL_INN.test(text);
+
+  function acquiringCommission(text) {
+    const m = /комисси[яи](?:\s+банка)?\s*:?\s*(\d[\d\s ]*(?:[.,]\d{1,2})?)/i.exec(text);
+    const n = m ? parseAmount(m[1]) : null;
+    return n && n > 0 ? n : 0;
+  }
 
   function classify(op) {
     const text = `${op.description} ${op.payer}`;
-    if (NOT_INCOME.some((r) => r.test(text))) return { kind: "excluded", reason: "похоже не на доход" };
-    const fromLegal = LEGAL.test(text.replace(/[«»"]/g, " "));
-    if (!fromLegal && CHECK.some((r) => r.test(text))) return { kind: "check", fromLegal, reason: "перевод: уточните, доход ли это" };
+    // Эквайринг — выручка по картам (в шаблоне банка есть «Возврат покупки 0,00», это не возврат).
+    // Доход на УСН — до вычета комиссии банка. Платят по картам в основном физлица.
+    if (ACQUIRING.test(text)) return { kind: "income", fromLegal: false, reason: "эквайринг", commission: acquiringCommission(op.description) };
+    if (SELF.test(text.replace(OWN_FUNDS_OF_PAYER, ""))) return { kind: "excluded", reason: "перевод своих денег" };
+    const clean = text.replace(NOT_REFUND, "");
+    if (NOT_INCOME.some((r) => r.test(clean))) return { kind: "excluded", reason: "похоже не на доход" };
+    const fromLegal = isLegal(text);
+    // Перевод от ИП может быть переводом со своего же счёта ИП — уточняем.
+    const fromIp = PAYER_IP.test(op.payer || "") && /перевод/i.test(clean);
+    if (/возврат/i.test(clean) || ((!fromLegal || fromIp) && CHECK.some((r) => r.test(clean)))) return { kind: "check", fromLegal, reason: "перевод или возврат: уточните, доход ли это" };
     return { kind: "income", fromLegal };
   }
 
   // Списания: что из них может быть расходом для УСН 15%.
+  // Свои налоги и взносы ИП считаем сами, иначе они попадут в расходы дважды.
+  // Взносы за работников передаются отдельно (opts.employeeContributions).
+  const TAX = /(уплата|оплата|перечисление)\s+налог(а|ов)?(?!\p{L})|(?<!\p{L})налог(а|ов|и)?\s+(по|на|за|при|усн)(?!\p{L})|единый налоговый (платеж|платёж)|(?<!\p{L})енп(?!\p{L})|(?<!\p{L})уфк(?!\p{L})|казначейств|страховые взносы|фиксированн\S* взнос|(?<!\p{L})и?фнс(?!\p{L})/iu;
   const NOT_EXPENSE = [
-    /между (своими|собственными) счетами|на свой счет|на свою карту|собственных средств/i,
-    /снятие наличных|выдача наличных|банкомат|atm/i,
-    // Налоги и взносы считаем сами, иначе они попадут в расходы дважды.
-    /налог|енп|единый налоговый|страховые взносы|фнс|уфк/i,
-    /погашение (кредита|займа)|возврат (кредита|займа)/i,
+    SELF,
+    /снятие наличных|выдача наличных|банкомат|(?<!\p{L})atm(?!\p{L})/iu,
+    TAX,
+    /(погашение|возврат)[^;]*?(кредит|займ|заём|депозит|обеспечительн|подотч[её]т)|ошибочно/i,
   ];
+  // Возврат денег покупателю уменьшает доход периода возврата (абз. 3 п. 1 ст. 346.17 НК РФ).
+  const REFUND_TO_CUSTOMER = /возврат[^;]*?(предоплат|аванс|покупател|заказчик|клиент|оплаты по договору|(денежных )?средств по договору|за (товар|услуг))/i;
+
+  // «в т.ч. НДС 20%», «НДС не облагается» — это про сумму платежа, а не уплата налога.
+  const VAT_NOTE = /в\s*т(ом)?\.?\s*ч(исле)?\.?\s*(налог на добавленную стоимость|ндс)[^;,.]*|(налог на добавленную стоимость|ндс)\s+не облагается|без (налога|ндс)( \(ндс\))?/gi;
 
   function classifyExpense(op) {
-    const text = `${op.description} ${op.payer}`;
+    const text = `${op.description} ${op.payer}`.replace(VAT_NOTE, " ");
     if (NOT_EXPENSE.some((r) => r.test(text))) return { kind: "not-expense", reason: "не расход для УСН" };
+    if (REFUND_TO_CUSTOMER.test(text)) return { kind: "refund", reason: "возврат покупателю: уменьшает доход", fromLegal: isLegal(text) };
     return { kind: "expense", reason: "проверьте, что это расход на бизнес" };
   }
 
@@ -174,6 +313,7 @@
   }
 
   const PERIOD_NAMES = ["I квартал", "полугодие", "9 месяцев", "год"];
+  const MONTHS_IN = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"];
   const pad = (n) => String(n).padStart(2, "0");
   const sum = (xs) => xs.reduce((a, b) => a + (b || 0), 0);
 
@@ -191,20 +331,25 @@
     return [workday(28, 4, year), workday(28, 7, year), workday(28, 10, year), workday(28, 4, year + 1)];
   }
 
+  // Уведомления об исчисленных авансах — до 25-го числа месяца уплаты (п. 9 ст. 58 НК РФ).
+  function usnNoticeDue(year) {
+    return [workday(25, 4, year), workday(25, 7, year), workday(25, 10, year)];
+  }
+
   /*
    * УСН «Доходы» 6%. Без работников налог уменьшается на взносы за себя до нуля;
-   * с работниками — на взносы за себя и за работников, но не больше чем наполовину.
+   * с работниками — на взносы за себя и за работников, но не больше чем наполовину
+   * (п. 3.1 ст. 346.21 НК РФ: важен сам факт работников, а не сумма взносов).
    * Упрощение: взносы года учитываются целиком уже с первого квартала.
    */
-  function usn6(quarterIncome, year, { rate = 0.06, employeeContributions = 0 } = {}) {
+  function usn6(quarterIncome, year, { rate = 0.06, employeeContributions = 0, hasEmployees = employeeContributions > 0 } = {}) {
     const c = contributions(sum(quarterIncome), year);
-    const hasEmployees = employeeContributions > 0;
     const deduction = c.total + employeeContributions;
     const due = usnDue(year);
     let cumIncome = 0, paid = 0, cumTax = 0;
     const periods = [];
     for (let q = 0; q < 4; q++) {
-      cumIncome += quarterIncome[q] || 0;
+      cumIncome = Math.max(0, cumIncome + (quarterIncome[q] || 0));
       const gross = cumIncome * rate;
       const reduce = hasEmployees ? Math.min(deduction, gross / 2) : deduction;
       cumTax = Math.max(0, roundRub(gross - reduce));
@@ -213,7 +358,7 @@
       periods.push({ name: PERIOD_NAMES[q], income: round2(cumIncome), payment, due: due[q] });
     }
     return { regime: "usn6", rate, income: round2(cumIncome), grossTax: roundRub(cumIncome * rate), contributions: c,
-      employeeContributions, tax: cumTax, periods, total: round2(cumTax + c.total) };
+      employeeContributions, hasEmployees, tax: cumTax, periods, total: round2(cumTax + c.total) };
   }
 
   /*
@@ -228,7 +373,7 @@
     let cumIncome = 0, cumExpenses = 0, paid = 0, cumTax = 0;
     const periods = [];
     for (let q = 0; q < 4; q++) {
-      cumIncome += quarterIncome[q] || 0;
+      cumIncome = Math.max(0, cumIncome + (quarterIncome[q] || 0));
       cumExpenses += quarterExpenses[q] || 0;
       cumTax = Math.max(0, roundRub((cumIncome - cumExpenses - c.total) * rate));
       if (q === 3) cumTax = Math.max(cumTax, roundRub(cumIncome * 0.01));
@@ -241,9 +386,15 @@
       tax: cumTax, minimumTaxApplied: cumTax > regular, periods, total: round2(cumTax + c.total) };
   }
 
-  /* НПД: 4% с физлиц, 6% с организаций и ИП, вычет 10 000 ₽ снижает ставки до 3% и 4%. */
-  function npd(monthly, deductionLeft = 10000) {
-    let left = deductionLeft;
+  /*
+   * НПД: 4% с физлиц, 6% с организаций и ИП. Вычет 10 000 ₽ снижает ставки до 3% и 4%,
+   * но даётся один раз за всё время (ст. 12 422-ФЗ): если человек уже был самозанятым,
+   * передайте остаток из «Мой налог».
+   */
+  const NPD_DEDUCTION = 10000;
+  function npd(monthly, deductionLeft = NPD_DEDUCTION) {
+    const start = Math.min(Math.max(0, deductionLeft), NPD_DEDUCTION);
+    let left = start;
     const months = monthly.map((m, i) => {
       const full = m.individuals * 0.04 + m.legal * 0.06;
       const bonus = Math.min(left, m.individuals * 0.01 + m.legal * 0.02);
@@ -252,20 +403,30 @@
     });
     const income = months.reduce((a, m) => a + m.income, 0);
     const tax = months.reduce((a, m) => a + m.tax, 0);
-    return { regime: "npd", income: round2(income), tax: round2(tax), months, deductionLeft: round2(left), total: round2(tax) };
+    return { regime: "npd", income: round2(income), tax: round2(tax), months, deductionStart: round2(start), deductionLeft: round2(left), total: round2(tax) };
   }
 
   // ---------- календарь ----------
 
+  /*
+   * Платежи (kind "payment") и то, что нужно подать без оплаты (kind "filing"):
+   * уведомления об авансах по УСН и декларацию за год.
+   */
   function calendarFor(res, year) {
     const label = res.regime === "usn15" ? "УСН 15%" : "УСН 6%";
     const items = res.periods.filter((x) => x.payment > 0).map((x) => ({
-      date: x.due, sum: x.payment,
+      date: x.due, sum: x.payment, kind: "payment",
       what: `${label}: ${x.name === "год" ? "налог за год" : "аванс за " + x.name}`,
     }));
-    items.push({ date: workday(28, 12, year), what: "Фиксированные взносы ИП", sum: res.contributions.fixed });
+    const notice = usnNoticeDue(year);
+    res.periods.slice(0, 3).forEach((x, q) => {
+      if (x.payment > 0) items.push({ date: notice[q], sum: null, kind: "filing",
+        what: `${label}: уведомление об авансе за ${x.name} на ${fmt(x.payment)} ₽ (подать, не платить)` });
+    });
+    items.push({ date: workday(25, 4, year + 1), sum: null, kind: "filing", what: `${label}: декларация за ${year} год (подать)` });
+    items.push({ date: workday(28, 12, year), what: "Фиксированные взносы ИП", sum: res.contributions.fixed, kind: "payment" });
     if (res.contributions.onePercent > 0) {
-      items.push({ date: workday(1, 7, year + 1), what: "Взнос 1% с дохода свыше 300 000 ₽", sum: res.contributions.onePercent });
+      items.push({ date: workday(1, 7, year + 1), what: "Взнос 1% с дохода свыше 300 000 ₽", sum: res.contributions.onePercent, kind: "payment" });
     }
     return items.sort((a, b) => toKey(a.date) - toKey(b.date));
   }
@@ -281,9 +442,10 @@
     const dtstamp = stamp.toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
     const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//codebywater//nalog-helper//RU", "CALSCALE:GREGORIAN"];
     calendar.forEach((c, i) => {
+      const summary = c.sum == null ? c.what : `${c.what}: ${fmt(c.sum)} ₽`;
       lines.push("BEGIN:VEVENT", `UID:nalog-helper-${ymd(c.date)}-${i}@codebywater.github.io`, `DTSTAMP:${dtstamp}`,
         `DTSTART;VALUE=DATE:${ymd(c.date)}`, `DTEND;VALUE=DATE:${nextDay(c.date)}`,
-        `SUMMARY:${esc(`${c.what}: ${fmt(c.sum)} ₽`)}`,
+        `SUMMARY:${esc(summary)}`,
         "BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-P3D", `DESCRIPTION:${esc(c.what)}`, "END:VALARM", "END:VEVENT");
     });
     lines.push("END:VCALENDAR");
@@ -292,24 +454,70 @@
 
   // ---------- сводный анализ ----------
 
+  function optNumber(v, name, { min = 0, max = Infinity } = {}) {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${name}: нужно число от ${fmt(min)} до ${max === Infinity ? "∞" : fmt(max)}, получено «${v}».`);
+    return n;
+  }
+
+  // Вычитает сумму из ячеек по порядку (от периода возврата к началу года): доход не бывает отрицательным.
+  function subtractBack(cells, amount) {
+    for (const [obj, key] of cells) {
+      const d = Math.min(obj[key], amount);
+      obj[key] -= d;
+      amount -= d;
+      if (amount <= 0) break;
+    }
+    return Math.max(0, amount);
+  }
+
+  // Первый месяц, в котором доход с начала года превысил порог.
+  function monthOver(monthly, threshold) {
+    let cum = 0;
+    for (let i = 0; i < monthly.length; i++) {
+      cum += monthly[i].individuals + monthly[i].legal;
+      if (cum > threshold) return i + 1;
+    }
+    return 0;
+  }
+
   /*
+   * analyze(text | [text, …], opts): каждая выписка разбирается отдельно
+   * (у разных банков разные колонки), операции объединяются.
+   *
    * opts.year — год расчёта (по умолчанию самый частый в выписке);
-   * opts.expenses — расходы за год вручную вместо найденных в выписке;
-   * opts.employeeContributions — взносы за работников за год (если есть работники);
-   * opts.usn15Rate — ставка УСН «Доходы минус расходы» в вашем регионе.
+   * opts.expenses — расходы за год вручную вместо найденных в выписке
+   *   (без взносов за работников: они добавляются отдельно);
+   * opts.hasEmployees — есть работники (даже если сумма взносов не указана);
+   * opts.employeeContributions — взносы за работников за год;
+   * opts.usn15Rate — ставка УСН «Доходы минус расходы» в вашем регионе (до 0,15);
+   * opts.npdDeductionLeft — остаток разового вычета НПД (по умолчанию 10 000 ₽).
    */
-  function analyze(text, opts = {}) {
-    const ops = parseStatement(text);
-    let year = opts.year;
+  function analyze(input, opts = {}) {
+    const parsed = (Array.isArray(input) ? input : [input]).map(parseStatementInfo);
+    return analyzeOps(parsed.flatMap((x) => x.ops), opts, mergeStats(parsed.map((x) => x.stats)));
+  }
+
+  function analyzeOps(ops, opts = {}, stats = emptyStats()) {
+    if (!ops.length) throw new Error("Не нашёл ни одной операции с датой и ненулевой суммой. Проверьте формат дат (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД) и колонку суммы.");
+    let year = opts.year == null ? null : Number(opts.year);
     if (!year) {
       const counts = {};
       ops.forEach((o) => { counts[o.date.y] = (counts[o.date.y] || 0) + 1; });
       year = +Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
     }
     const p = params(year);
+    const manualExpenses = optNumber(opts.expenses, "Расходы");
+    const employeeContributions = optNumber(opts.employeeContributions, "Взносы за работников") || 0;
+    const hasEmployees = !!opts.hasEmployees || employeeContributions > 0;
+    const usn15Rate = opts.usn15Rate == null ? 0.15 : optNumber(opts.usn15Rate, "Ставка УСН 15%", { min: 0.0001, max: 0.15 });
+    const npdLeft = opts.npdDeductionLeft == null ? NPD_DEDUCTION : Math.min(optNumber(opts.npdDeductionLeft, "Остаток вычета НПД"), NPD_DEDUCTION);
+
     const quarter = [0, 0, 0, 0], quarterExp = [0, 0, 0, 0];
     const monthly = Array.from({ length: 12 }, () => ({ individuals: 0, legal: 0 }));
-    const income = [], check = [], excluded = [], expenses = [], notExpenses = [];
+    const income = [], check = [], excluded = [], expenses = [], notExpenses = [], refunds = [];
+    let commissions = 0;
 
     for (const op of ops) {
       if (op.date.y !== year) continue;
@@ -317,41 +525,75 @@
       if (op.amount < 0) {
         const c = classifyExpense(op);
         const item = { ...op, amount: -op.amount, ...c };
-        if (c.kind === "expense") { expenses.push(item); quarterExp[q] += item.amount; } else notExpenses.push(item);
+        if (c.kind === "expense") { expenses.push(item); quarterExp[q] += item.amount; }
+        else if (c.kind === "refund") refunds.push(item);
+        else notExpenses.push(item);
         continue;
       }
       const c = classify(op);
-      const item = { ...op, ...c };
-      if (c.kind === "excluded") { excluded.push(item); continue; }
-      if (c.kind === "check") { check.push(item); continue; }
+      if (c.kind === "excluded") { excluded.push({ ...op, ...c }); continue; }
+      if (c.kind === "check") { check.push({ ...op, ...c }); continue; }
+      // Эквайринг: доход — вся выручка, комиссия банка — расход для УСН 15%.
+      const fee = c.commission || 0;
+      const item = { ...op, ...c, amount: round2(op.amount + fee), credited: op.amount };
       income.push(item);
-      quarter[q] += op.amount;
-      monthly[op.date.m - 1][c.fromLegal ? "legal" : "individuals"] += op.amount;
+      quarter[q] += item.amount;
+      monthly[op.date.m - 1][c.fromLegal ? "legal" : "individuals"] += item.amount;
+      if (fee) {
+        commissions += fee;
+        expenses.push({ date: op.date, amount: fee, description: "Комиссия банка за эквайринг", payer: op.payer, kind: "expense", reason: "комиссия эквайринга" });
+        quarterExp[q] += fee;
+      }
+    }
+
+    // Возвраты покупателям уменьшают доход в периоде возврата; для НПД — доход месяца
+    // (по-настоящему чек аннулируют, и налог пересчитывается за месяц продажи).
+    for (const r of refunds) {
+      const q = Math.floor((r.date.m - 1) / 3);
+      // Только квартал возврата (абз. 3 п. 1 ст. 346.17 НК РФ): авансы прошлых кварталов уже уплачены.
+      quarter[q] -= r.amount;
+      const key = r.fromLegal ? "legal" : "individuals", other = r.fromLegal ? "individuals" : "legal";
+      const back = Array.from({ length: r.date.m }, (_, i) => monthly[r.date.m - 1 - i]);
+      subtractBack([...back.map((m) => [m, key]), ...back.map((m) => [m, other])], r.amount);
     }
 
     // Расходы, введённые вручную, распределяем по кварталам пропорционально доходу.
     const foundExpenses = sum(quarterExp);
     let expByQuarter = quarterExp;
-    if (opts.expenses != null) {
+    if (manualExpenses != null) {
       const inc = sum(quarter);
-      expByQuarter = quarter.map((x) => (inc ? opts.expenses * x / inc : opts.expenses / 4));
+      expByQuarter = quarter.map((x) => (inc ? manualExpenses * x / inc : manualExpenses / 4));
     }
+    // Взносы за работников — расход на УСН 15% (пп. 7 п. 1 ст. 346.16 НК РФ), платятся каждый месяц.
+    if (employeeContributions) expByQuarter = expByQuarter.map((x) => x + employeeContributions / 4);
 
-    const employeeContributions = opts.employeeContributions || 0;
-    const u6 = usn6(quarter, year, { employeeContributions });
-    const u15 = usn15(quarter, expByQuarter, year, { rate: opts.usn15Rate || 0.15 });
-    const npdRes = npd(monthly);
+    const u6 = usn6(quarter, year, { employeeContributions, hasEmployees });
+    const u15 = usn15(quarter, expByQuarter, year, { rate: usn15Rate });
+    const npdRes = npd(monthly, npdLeft);
     const totalIncome = u6.income;
-    // Самозанятые не могут нанимать работников.
-    const npdAllowed = totalIncome <= p.npdLimit && !employeeContributions;
+    // Самозанятые не могут нанимать работников (пп. 4 п. 2 ст. 4 422-ФЗ).
+    const npdAllowed = totalIncome <= p.npdLimit && !hasEmployees;
 
     const warnings = [];
+    if (stats.badDate) warnings.push({ level: "warn", text: `${stats.badDate} строк(и) пропущено: дата не читается. Проверьте формат дат (ДД.ММ.ГГГГ).` });
+    if (stats.badAmount) warnings.push({ level: "warn", text: `${stats.badAmount} строк(и) с датой пропущено: не удалось прочитать сумму.` });
+    if (stats.foreign) warnings.push({ level: "warn", text: `${stats.foreign} операц. в иностранной валюте без суммы в рублях не вошли в расчёт.` });
+    if (stats.failed) warnings.push({ level: "warn", text: `${stats.failed} отклонённых или отменённых операций не учтено.` });
+    if (stats.mdyFiles) warnings.push({ level: "warn", text: "Даты прочитаны как месяц/день/год (так сохраняет Excel с американскими настройками)." });
     if (totalIncome > p.npdLimit) warnings.push({ level: "danger", text: `Доход ${fmt(totalIncome)} ₽ выше лимита самозанятого (${fmt(p.npdLimit)} ₽): на НПД оставаться нельзя.` });
     else if (totalIncome > p.npdLimit * 0.8) warnings.push({ level: "warn", text: `Доход уже ${Math.round(totalIncome / p.npdLimit * 100)}% от лимита самозанятого (${fmt(p.npdLimit)} ₽).` });
-    if (totalIncome > p.ndsThreshold) warnings.push({ level: "danger", text: `Доход выше ${fmt(p.ndsThreshold)} ₽: на УСН с этого года появляется обязанность платить НДС.` });
-    else if (totalIncome > p.ndsThreshold * 0.8) warnings.push({ level: "warn", text: `Доход приближается к порогу НДС на УСН (${fmt(p.ndsThreshold)} ₽).` });
+    if (totalIncome > p.ndsThreshold) {
+      // Порог превышен в течение года — НДС с 1-го числа следующего месяца (п. 5 ст. 145 НК РФ).
+      const m = monthOver(monthly, p.ndsThreshold) || 12;
+      const from = m === 12 ? `01.01.${year + 1}` : `01.${pad(m + 1)}.${year}`;
+      warnings.push({ level: "danger", text: `Доход превысил ${fmt(p.ndsThreshold)} ₽ в ${MONTHS_IN[m - 1]}: с ${from} на УСН нужно исчислять и платить НДС (5%, 7% или 22%). Если доход за прошлый год был больше ${fmt(p.ndsThreshold)} ₽, НДС платится с 1 января.` });
+    } else if (totalIncome > p.ndsThreshold * 0.8) warnings.push({ level: "warn", text: `Доход приближается к порогу НДС на УСН (${fmt(p.ndsThreshold)} ₽).` });
     if (totalIncome > p.usnLimit) warnings.push({ level: "danger", text: `Доход выше лимита УСН (${fmt(p.usnLimit)} ₽).` });
-    if (check.length) warnings.push({ level: "warn", text: `${check.length} поступл. похожи на переводы — проверьте, доход это или нет. В расчёт они не вошли.` });
+    if (check.length) warnings.push({ level: "warn", text: `${check.length} ${plural(check.length, "поступление похоже", "поступления похожи", "поступлений похожи")} на переводы или возвраты — проверьте, доход это или нет. В расчёт такие поступления не вошли.` });
+    if (refunds.length) warnings.push({ level: "warn", text: `${refunds.length} возврат(а) покупателям на ${fmt(sum(refunds.map((r) => r.amount)))} ₽ уменьшили доход. Проверьте, что это действительно возвраты.` });
+    if (commissions) warnings.push({ level: "warn", text: `Эквайринг: доход посчитан до вычета комиссии банка (${fmt(commissions)} ₽), комиссия учтена в расходах УСН 15%.` });
+    if (hasEmployees && !employeeContributions) warnings.push({ level: "warn", text: "Отмечено, что есть работники, но не указаны взносы за них: УСН 6% уменьшен только на ваши взносы и не больше чем наполовину, в расходах УСН 15% этих взносов нет." });
+    if (hasEmployees) warnings.push({ level: "warn", text: "НДФЛ, удержанный из зарплаты работников и уплаченный через ЕНП, — тоже расход на оплату труда для УСН 15%. В выписке ЕНП не делится на части, добавьте этот НДФЛ к расходам вручную." });
     if (u15.minimumTaxApplied) warnings.push({ level: "warn", text: "На УСН 15% получился минимальный налог — 1% от доходов: расходы почти равны доходам." });
 
     const options = [["usn6", u6.total], ["usn15", u15.total]];
@@ -359,17 +601,47 @@
     const cheaper = options.sort((a, b) => a[1] - b[1])[0][0];
 
     return {
-      year, params: p, totalIncome, income, check, excluded, expenses, notExpenses,
-      foundExpenses: round2(foundExpenses), expensesManual: opts.expenses != null,
-      usn: u6, usn15: u15, npd: npdRes, npdAllowed, warnings, cheaper,
+      year, params: p, totalIncome, income, check, excluded, expenses, notExpenses, refunds,
+      foundExpenses: round2(foundExpenses), expensesManual: manualExpenses != null,
+      hasEmployees, employeeContributions,
+      usn: u6, usn15: u15, npd: npdRes, npdAllowed, warnings, cheaper, parseStats: stats,
       calendars: { usn6: calendarFor(u6, year), usn15: calendarFor(u15, year) },
       calendar: calendarFor(cheaper === "usn15" ? u15 : u6, year),
     };
   }
 
+  /*
+   * Значения полей формы на странице → opts для analyze. Отметка «Есть работники»
+   * работает и без суммы: НПД становится недоступен, действует ограничение 50%.
+   */
+  function formOptions(f = {}) {
+    const num = (s) => {
+      if (s == null || String(s).trim() === "") return null;
+      const n = parseAmount(s);
+      return n == null ? null : Math.max(0, n);
+    };
+    const rate = num(f.rate);
+    const npdLeft = num(f.npdLeft);
+    return {
+      expenses: num(f.expenses),
+      hasEmployees: !!f.staff,
+      employeeContributions: f.staff ? num(f.staffSum) || 0 : 0,
+      usn15Rate: rate ? Math.min(rate, 15) / 100 : 0.15,
+      npdDeductionLeft: npdLeft == null ? NPD_DEDUCTION : Math.min(npdLeft, NPD_DEDUCTION),
+    };
+  }
+
+  function plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+
   function toKey(d) { const [dd, mm, yy] = d.split(".").map(Number); return yy * 10000 + mm * 100 + dd; }
   function fmt(n) { return Math.round(n).toLocaleString("ru-RU").replace(/ /g, " "); }
 
-  return { PARAMS, params, parseStatement, classify, classifyExpense, contributions, usn6, usn15, npd,
-    workday, calendarFor, toIcs, analyze, fmt };
+  return { PARAMS, params, parseStatement, parseStatementInfo, parseAmount, parseDate, mergeStats, decodeStatement,
+    classify, classifyExpense, contributions, usn6, usn15, npd, workday, calendarFor, toIcs,
+    analyze, analyzeOps, formOptions, fmt };
 });
