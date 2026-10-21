@@ -1,0 +1,15 @@
+{
+  "name": "nalog-helper",
+  "description": "Налоговый помощник для ИП и самозанятых.",
+  "owner": {
+    "name": "codebywater",
+    "email": "gregreshetnyak52@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "nalog-helper",
+      "source": "./",
+      "description": "Налоги и взносы ИП на УСН 6%, УСН 15% и самозанятого по банковской выписке. Локально, без отправки данных."
+    }
+  ]
+}

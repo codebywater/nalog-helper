@@ -1,0 +1,12 @@
+{
+  "name": "nalog-helper",
+  "version": "0.2.0",
+  "description": "Налоги и взносы ИП на УСН 6%, УСН 15% и самозанятого по банковской выписке. Локально, без отправки данных.",
+  "author": {
+    "name": "codebywater",
+    "email": "gregreshetnyak52@gmail.com"
+  },
+  "repository": "https://github.com/codebywater/nalog-helper",
+  "license": "MIT",
+  "keywords": ["taxes", "usn", "self-employed", "russia", "bank-statement", "agent-skills", "privacy"]
+}
