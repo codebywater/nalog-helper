@@ -37,33 +37,51 @@
   const RUB = /^$|^(rub|rur|₽|руб|рубл|российск|643|810)/i;
   const DELIMITERS = [";", ",", "\t"];
 
-  /*
-   * CSV целиком, а не построчно: Excel сохраняет ячейки с переносом строки
-   * («счёт / ИНН / название») в кавычках, и такая запись занимает несколько строк.
-   * Кавычка открывает поле только в его начале; внутри поля она обычный символ.
-   */
-  function parseCsv(text, delim, byLine = false) {
-    if (byLine) return text.split(/\r?\n/).flatMap((l) => parseCsv(l, delim));
-    const rows = [];
-    let row = [], cur = "", quoted = false;
+  // Строки таблицы и номер строки файла, с которой каждая начинается (для поля line).
+  function parseRows(text, delim, byLine = false) {
+    if (byLine) {
+      const rows = [], lines = [];
+      text.split(/\r?\n/).forEach((l, k) => {
+        for (const r of parseRows(l, delim).rows) { rows.push(r); lines.push(k + 1); }
+      });
+      return { rows, lines };
+    }
+    const raw = [];
+    let row = [], cur = "", quoted = false, line = 1, start = 1;
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
       if (quoted) {
         if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; }
         else if (ch === '"') quoted = false;
-        else cur += ch;
+        else {
+          cur += ch;
+          if (ch === "\n" || (ch === "\r" && text[i + 1] !== "\n")) line++;
+        }
       } else if (ch === '"' && cur.trim() === "") { quoted = true; cur = ""; }
       else if (ch === delim) { row.push(cur); cur = ""; }
       else if (ch === "\n" || ch === "\r") {
         if (ch === "\r" && text[i + 1] === "\n") i++;
-        row.push(cur); rows.push(row); row = []; cur = "";
+        row.push(cur); raw.push([row, start]); row = []; cur = "";
+        start = ++line;
       } else cur += ch;
     }
     // Незакрытая кавычка съела бы остаток файла: тогда разбираем по строкам.
-    if (quoted && text.includes("\n")) return parseCsv(text, delim, true);
-    row.push(cur); rows.push(row);
-    return rows.map((r) => r.map((s) => s.replace(/\s*[\r\n]+\s*/g, " ").trim())).filter((r) => r.some(Boolean));
+    if (quoted && text.includes("\n")) return parseRows(text, delim, true);
+    row.push(cur); raw.push([row, start]);
+    const rows = [], lines = [];
+    for (const [r, l] of raw) {
+      const cells = r.map((c) => c.replace(/\s*[\r\n]+\s*/g, " ").trim());
+      if (cells.some(Boolean)) { rows.push(cells); lines.push(l); }
+    }
+    return { rows, lines };
   }
+
+  /*
+   * CSV целиком, а не построчно: Excel сохраняет ячейки с переносом строки
+   * («счёт / ИНН / название») в кавычках, и такая запись занимает несколько строк.
+   * Кавычка открывает поле только в его начале; внутри поля она обычный символ.
+   */
+  function parseCsv(text, delim) { return parseRows(text, delim).rows; }
 
   function findColumns(header) {
     const lower = header.map((h) => h.toLowerCase().replace(/\s+/g, " ").replace(/^['"]|['"]$/g, ""));
@@ -90,11 +108,11 @@
   function findHeader(text) {
     let best = null;
     for (const delim of DELIMITERS) {
-      const rows = parseCsv(text, delim);
+      const { rows, lines } = parseRows(text, delim);
       for (let i = 0; i < Math.min(rows.length, 50); i++) {
         const cols = findColumns(rows[i]);
         if (!isHeader(cols)) continue;
-        if (!best || i < best.idx || (i === best.idx && rows[i].length > best.rows[best.idx].length)) best = { rows, idx: i, cols, delim };
+        if (!best || i < best.idx || (i === best.idx && rows[i].length > best.rows[best.idx].length)) best = { rows, lines, idx: i, cols, delim };
         break;
       }
     }
@@ -177,7 +195,7 @@
       const anyDate = DELIMITERS.some((d) => parseCsv(text, d).slice(0, 50).some((r) => findColumns(r).date !== undefined));
       throw new Error(anyDate ? "Не нашёл колонку с суммой." : "Не нашёл колонку с датой. Нужна шапка вида «Дата операции;Сумма;Описание».");
     }
-    const { rows, idx, cols, delim } = found;
+    const { rows, lines, idx, cols, delim } = found;
     const header = rows[idx];
     const data = rows.slice(idx + 1);
     const order = detectDateOrder(data.map((r) => r[cols.date] || ""));
@@ -222,7 +240,7 @@
         // Альфа-Банк пишет MCC прямо в описание: «… RUR MCC4121».
         mcc: get(row, "mcc") || ((/(?<![A-Za-z])MCC\s?(\d{4})(?!\d)/i.exec(get(row, "description")) || [])[1] || ""),
         status,
-        line: idx + 2 + i,
+        line: lines[idx + 1 + i],
       });
     });
     // Время 00:00 у всех операций — это заглушка банка (так делает ВТБ), а не покупки в полночь.
